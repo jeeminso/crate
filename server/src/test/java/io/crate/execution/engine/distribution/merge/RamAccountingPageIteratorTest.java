@@ -21,7 +21,6 @@
 
 package io.crate.execution.engine.distribution.merge;
 
-import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Iterators;
 import io.crate.analyze.OrderBy;
 import io.crate.breaker.ConcurrentRamAccounting;
@@ -44,6 +43,7 @@ import org.junit.Test;
 
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.List;
 
 import static org.hamcrest.Matchers.instanceOf;
 
@@ -109,7 +109,7 @@ public class RamAccountingPageIteratorTest extends ESTestCase {
             2,
             true,
             null,
-            () -> new RowAccountingWithEstimators(ImmutableList.of(DataTypes.STRING, DataTypes.STRING, DataTypes.STRING),
+            () -> new RowAccountingWithEstimators(List.of(DataTypes.STRING, DataTypes.STRING, DataTypes.STRING),
                                                   RamAccounting.NO_ACCOUNTING));
         assertThat(pagingIterator, instanceOf(RamAccountingPageIterator.class));
         assertThat(((RamAccountingPageIterator) pagingIterator).delegatePagingIterator,
@@ -120,7 +120,7 @@ public class RamAccountingPageIteratorTest extends ESTestCase {
             new KeyIterable<>(1, Collections.singletonList(TEST_ROWS[1]))));
         pagingIterator.finish();
 
-        Row[] rows = Iterators.toArray(pagingIterator, Row.class);
+        Row[] rows =  Iterators.toArray(pagingIterator, Row.class);
         assertThat(rows[0], TestingHelpers.isRow("a", "b", "c"));
         assertThat(rows[1], TestingHelpers.isRow("d", "e", "f"));
     }
@@ -132,7 +132,7 @@ public class RamAccountingPageIteratorTest extends ESTestCase {
             true,
             null,
             () -> new RowAccountingWithEstimators(
-                ImmutableList.of(DataTypes.STRING, DataTypes.STRING, DataTypes.STRING),
+                List.of(DataTypes.STRING, DataTypes.STRING, DataTypes.STRING),
                 ConcurrentRamAccounting.forCircuitBreaker(
                     "test",
                     new MemoryCircuitBreaker(

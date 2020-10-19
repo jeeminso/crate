@@ -22,7 +22,6 @@
 package io.crate.execution.jobs;
 
 import com.google.common.collect.ForwardingIterator;
-import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Iterables;
 import com.google.common.collect.Iterators;
 import com.google.common.util.concurrent.MoreExecutors;
@@ -41,6 +40,7 @@ import io.crate.testing.TestingHelpers;
 import io.crate.testing.TestingRowConsumer;
 import org.junit.Test;
 
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.Iterator;
@@ -288,7 +288,7 @@ public class DistResultRXTaskTest extends ESTestCase {
     private static class FailOnMergePagingIterator<TKey, TRow> extends ForwardingIterator<TRow> implements PagingIterator<TKey, TRow> {
 
         private Iterator<TRow> iterator = Collections.emptyIterator();
-        private final ImmutableList.Builder<KeyIterable<TKey, TRow>> iterables = ImmutableList.builder();
+        private final List<KeyIterable<TKey, TRow>> iterables = new ArrayList<>();
         private final int mergesCallCountUntilError;
         private int mergesCallCount = 0;
 
