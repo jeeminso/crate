@@ -43,13 +43,13 @@ import io.crate.sql.tree.AlterTableAddColumn;
 import io.crate.sql.tree.CheckColumnConstraint;
 import io.crate.sql.tree.Expression;
 import io.crate.sql.tree.QualifiedName;
+import io.crate.sql.tree.TableElement;
 
 import javax.annotation.Nullable;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.stream.Collectors;
-
-import static java.util.Collections.singletonList;
 
 class AlterTableAddColumnAnalyzer {
 
@@ -81,32 +81,45 @@ class AlterTableAddColumnAnalyzer {
             txnCtx, nodeCtx, paramTypeHints, FieldProvider.FIELDS_AS_LITERAL, null);
         var exprCtx = new ExpressionAnalysisContext();
 
-        AddColumnDefinition<Expression> tableElement = alterTable.tableElement();
-        // convert and validate the column name
-        ExpressionToColumnIdentVisitor.convert(tableElement.name());
-
-        // 1st phase, exclude check constraints (their expressions contain column references) and generated expressions
-        AddColumnDefinition<Symbol> addColumnDefinition = new AddColumnDefinition<>(
-            exprAnalyzerWithFieldsAsString.convert(tableElement.name(), exprCtx),
-            null,   // expression must be mapped later on using mapExpressions()
-            tableElement.type() == null ? null : tableElement.type().map(y -> exprAnalyzerWithFieldsAsString.convert(y, exprCtx)),
-            tableElement.constraints()
-                .stream()
-                .filter(c -> false == c instanceof CheckColumnConstraint)
-                .map(x -> x.map(y -> exprAnalyzerWithFieldsAsString.convert(y, exprCtx)))
-                .collect(Collectors.toList()),
-            false,
-            tableElement.generatedExpression() != null
+        // convert and validate the column names
+        alterTable.tableElements().forEach(
+            tableElement -> ExpressionToColumnIdentVisitor.convert(tableElement.name())
         );
-        AnalyzedTableElements<Symbol> analyzedTableElements = TableElementsAnalyzer.analyze(
-            singletonList(addColumnDefinition), tableInfo.ident(), tableInfo);
 
-        // 2nd phase, analyze possible generated expressions
-        AddColumnDefinition<Symbol> addColumnDefinitionWithExpression = (AddColumnDefinition<Symbol>) tableElement.mapExpressions(
-            addColumnDefinition,
-            x -> exprAnalyzerWithReferenceResolver.convert(x, exprCtx));
+        List<TableElement<Symbol>> addColumnDefinitions = new ArrayList<>();
+        List<TableElement<Symbol>> addColumnDefinitionWithExpressions = new ArrayList<>();
+
+        alterTable.tableElements().forEach(
+            tableElement -> {
+                // 1st phase, exclude check constraints (their expressions contain column references) and generated expressions
+                AddColumnDefinition<Symbol> addColumnDefinition = new AddColumnDefinition<>(
+                    exprAnalyzerWithFieldsAsString.convert(tableElement.name(), exprCtx),
+                    null,   // expression must be mapped later on using mapExpressions()
+                    tableElement.type() ==
+                    null ? null : tableElement.type().map(y -> exprAnalyzerWithFieldsAsString.convert(y, exprCtx)),
+                    tableElement.constraints()
+                        .stream()
+                        .filter(c -> false == c instanceof CheckColumnConstraint)
+                        .map(x -> x.map(y -> exprAnalyzerWithFieldsAsString.convert(y, exprCtx)))
+                        .collect(Collectors.toList()),
+                    false,
+                    tableElement.generatedExpression() != null
+                );
+                addColumnDefinitions.add(addColumnDefinition);
+
+                // 2nd phase, analyze possible generated expressions
+                AddColumnDefinition<Symbol> addColumnDefinitionWithExpression = (AddColumnDefinition<Symbol>) tableElement.mapExpressions(
+                    addColumnDefinition,
+                    x -> exprAnalyzerWithReferenceResolver.convert(x, exprCtx));
+                addColumnDefinitionWithExpressions.add(addColumnDefinitionWithExpression);
+            }
+        );
+
+        AnalyzedTableElements<Symbol> analyzedTableElements = TableElementsAnalyzer.analyze(
+            addColumnDefinitions, tableInfo.ident(), tableInfo);
         AnalyzedTableElements<Symbol> analyzedTableElementsWithExpressions = TableElementsAnalyzer.analyze(
-            singletonList(addColumnDefinitionWithExpression), tableInfo.ident(), tableInfo);
+            addColumnDefinitionWithExpressions, tableInfo.ident(), tableInfo);
+
         // now analyze possible check expressions
         var checkColumnConstraintsAnalyzer = new ExpressionAnalyzer(
             txnCtx,
@@ -115,15 +128,19 @@ class AlterTableAddColumnAnalyzer {
             new SelfReferenceFieldProvider(
                 tableInfo.ident(), referenceResolver, analyzedTableElements.columns()),
             null);
-        tableElement.constraints()
-            .stream()
-            .filter(CheckColumnConstraint.class::isInstance)
-            .map(x -> x.map(y -> checkColumnConstraintsAnalyzer.convert(y, exprCtx)))
-            .forEach(c -> {
-                CheckColumnConstraint<Symbol> check = (CheckColumnConstraint<Symbol>) c;
-                analyzedTableElements.addCheckColumnConstraint(tableInfo.ident(), check);
-                analyzedTableElementsWithExpressions.addCheckColumnConstraint(tableInfo.ident(), check);
-            });
+
+        alterTable.tableElements().forEach(
+            tableElement ->
+                tableElement.constraints()
+                    .stream()
+                    .filter(CheckColumnConstraint.class::isInstance)
+                    .map(x -> x.map(y -> checkColumnConstraintsAnalyzer.convert(y, exprCtx)))
+                    .forEach(c -> {
+                        CheckColumnConstraint<Symbol> check = (CheckColumnConstraint<Symbol>) c;
+                        analyzedTableElements.addCheckColumnConstraint(tableInfo.ident(), check);
+                        analyzedTableElementsWithExpressions.addCheckColumnConstraint(tableInfo.ident(), check);
+                    })
+        );
         return new AnalyzedAlterTableAddColumn(tableInfo, analyzedTableElements, analyzedTableElementsWithExpressions);
     }
 

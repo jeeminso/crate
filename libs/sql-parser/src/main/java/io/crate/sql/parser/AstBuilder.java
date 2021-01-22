@@ -1016,7 +1016,9 @@ class AstBuilder extends SqlBaseBaseVisitor<Node> {
     public Node visitAddColumn(SqlBaseParser.AddColumnContext context) {
         return new AlterTableAddColumn(
             (Table) visit(context.alterTableDefinition()),
-            (AddColumnDefinition) visit(context.addColumnDefinition()));
+            context.addColumnDefinition().stream()
+            .map(this::visit)
+            .collect(Collectors.toList()));
     }
 
     @Override

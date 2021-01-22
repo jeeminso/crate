@@ -46,6 +46,7 @@ import java.util.Set;
 
 import static io.crate.testing.TestingHelpers.mapToSortedString;
 import static org.hamcrest.Matchers.containsInAnyOrder;
+import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.is;
 import static org.hamcrest.core.IsEqual.equalTo;
 
@@ -63,6 +64,11 @@ public class AlterTableAddColumnAnalyzerTest extends CrateDummyClusterServiceUni
                       "     primary key (pk['a'], pk['b']['c'])" +
                       ")")
             .addTable("create table tbl_index_off (num bigint index off, primary key (num))")
+            .addTable("create table t(" +
+                      "     id long primary key, " +
+                      "     age int, " +
+                      "     details object (strict) as ( stuff object )" +
+                      ")")
             .build();
         plannerContext = e.getPlannerContext(clusterService.state());
     }
@@ -427,4 +433,88 @@ public class AlterTableAddColumnAnalyzerTest extends CrateDummyClusterServiceUni
         Map<String, Object> mapping = (Map<String, Object>) addColumn.mapping().get("properties");
         assertThat(mapping, Matchers.hasEntry(is("num"), is(Map.of("index", false, "type", "long"))));
     }
+
+    @Test
+    public void testAddMultipleColumns() throws Exception {
+
+        BoundAddColumn analysis = analyze(
+            "alter table t " +
+            "add details['stuff']['foo'] object (strict) as (o object as (b array(long)))," +
+            "add column generated_abs_age as abs(age)," +
+            "add string_no_docvalues string STORAGE WITH (columnstore = false) not null," +
+            "add column additional_pk string primary key"
+        );
+
+        //details['stuff']['foo'] object as (o object as (b array(long)))
+        List<AnalyzedColumnDefinition<Object>> columns = analysis.analyzedTableElements().columns();
+        assertThat(columns.size(), is(5));
+        assertThat(columns.get(0).ident(), is(ColumnIdent.fromPath("details")));
+        assertThat(columns.get(0).dataType().id(), is(ObjectType.ID));
+        assertThat(columns.get(0).objectType, is(ColumnPolicy.STRICT));
+        assertThat(columns.get(0).isParentColumn(), is(true));
+        assertThat(columns.get(0).children().size(), is(1));
+
+        AnalyzedColumnDefinition<Object> stuff = columns.get(0).children().get(0);
+        assertThat(stuff.ident(), is(ColumnIdent.fromPath("details.stuff")));
+        assertThat(stuff.dataType().id(), is(ObjectType.ID));
+        assertThat(stuff.isParentColumn(), is(true));
+        assertThat(stuff.children().size(), is(1));
+
+        AnalyzedColumnDefinition<Object> foo = stuff.children().get(0);
+        assertThat(foo.ident(), is(ColumnIdent.fromPath("details.stuff.foo")));
+        assertThat(foo.dataType().id(), is(ObjectType.ID));
+        assertThat(foo.objectType, is(ColumnPolicy.STRICT));
+        assertThat(foo.isParentColumn(), is(false));
+        assertThat(foo.children().size(), is(1));
+
+        AnalyzedColumnDefinition<Object> o = foo.children().get(0);
+        assertThat(o.ident(), is(ColumnIdent.fromPath("details.stuff.foo.o")));
+        assertThat(o.dataType().id(), is(ObjectType.ID));
+        assertThat(o.isParentColumn(), is(false));
+        assertThat(o.children().size(), is(1));
+
+        AnalyzedColumnDefinition<Object> b = o.children().get(0);
+        assertThat(b.ident(), is(ColumnIdent.fromPath("details.stuff.foo.o.b")));
+        assertThat(b.dataType(), is(DataTypes.LONG));
+        assertTrue(b.isArrayOrInArray());
+
+        //generated_abs_age as abs(age)
+        assertThat(analysis.hasNewGeneratedColumns(), is(true));
+        AnalyzedColumnDefinition nameGeneratedColumn = null;
+        for (AnalyzedColumnDefinition<Object> columnDefinition : analysis.analyzedTableElements().columns()) {
+            if (columnDefinition.ident().name().equals("generated_abs_age")) {
+                nameGeneratedColumn = columnDefinition;
+            }
+        }
+        assertNotNull(nameGeneratedColumn);
+        assertThat(nameGeneratedColumn.dataType(), equalTo(DataTypes.INTEGER));
+        assertThat(nameGeneratedColumn.formattedGeneratedExpression(), is("abs(age)"));
+
+        //string_no_docvalues string STORAGE WITH (columnstore = false) not null
+        Map<String, Object> mapping = analysis.mapping();
+        assertThat(mapToSortedString(mapping),
+                   containsString(" string_no_docvalues={doc_values=false, position=6, type=keyword}"));
+
+        //add column pk string primary key
+        assertThat(AnalyzedTableElements.primaryKeys(analysis.analyzedTableElements()), Matchers.contains(
+            "additional_pk", "id"
+        ));
+        AnalyzedColumnDefinition<Object> idColumn = null;
+        AnalyzedColumnDefinition<Object> additionalPkColumn = null;
+        for (AnalyzedColumnDefinition<Object> column : analysis.analyzedTableElements().columns()) {
+            if (column.name().equals("id")) {
+                idColumn = column;
+            } else {
+                additionalPkColumn = column;
+            }
+        }
+        assertNotNull(idColumn);
+        assertThat(idColumn.ident(), equalTo(new ColumnIdent("id")));
+        assertThat(idColumn.dataType(), equalTo(DataTypes.LONG));
+
+        assertNotNull(additionalPkColumn);
+        assertThat(additionalPkColumn.ident(), equalTo(new ColumnIdent("additional_pk")));
+        assertThat(additionalPkColumn.dataType(), equalTo(DataTypes.STRING));
+    }
 }
+
